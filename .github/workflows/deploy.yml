@@ -1,0 +1,57 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          VITE_FIREBASE_API_KEY: AIzaSyCgt0Wz6N2fAnqujWDfPFISF5M4cPrA3H8
+          VITE_FIREBASE_AUTH_DOMAIN: yukuhashi-5ab20.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: yukuhashi-5ab20
+          VITE_FIREBASE_STORAGE_BUCKET: yukuhashi-5ab20.firebasestorage.app
+          VITE_FIREBASE_MESSAGING_SENDER_ID: "942936459826"
+          VITE_FIREBASE_APP_ID: "1:942936459826:web:2b9e48a735e7c74d5c8a2b"
+          VITE_APP_ID: fukushi-app-v1
+        run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
