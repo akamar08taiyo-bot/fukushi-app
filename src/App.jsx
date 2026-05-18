@@ -8,7 +8,7 @@ import {
   Settings, ChevronRight, ChevronDown, ChevronLeft,
   HelpCircle, Search, BarChart3, Users,
   LayoutList, AlertCircle as AlertIcon,
-  Bell, TrendingUp
+  Bell, TrendingUp, Printer, LogOut, Minus
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
@@ -25,6 +25,9 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const APP_ID = import.meta.env.VITE_APP_ID || 'fukushi-app-v1';
 const STORAGE_KEY_WORKSPACE = 'app_workspace_id';
+const STORAGE_KEY_STAFF = 'app_my_staff';
+const STORAGE_KEY_ZOOM = 'app_zoom_v2';
+const HQ_CODE = '本社';
 
 // --- Utility Functions ---
 const calculateDaysFromAdmission = (admissionDateStr) => {
@@ -171,7 +174,14 @@ const SmartDateInput = React.memo(({ label, value, onChange, onFocus, onBlur }) 
     } else if (/^(\d{1,2})[/\-.月]+(\d{1,2})[/\-.日]*$/.test(val)) {
       const [, a, b] = val.match(/^(\d{1,2})[/\-.月]+(\d{1,2})[/\-.日]*$/);
       p = `${y}-${a.padStart(2, '0')}-${b.padStart(2, '0')}`;
-    } else if (/^\d{1,2}$/.test(val)) {
+    } else if (/^\d{2}$/.test(val)) {
+      const num = parseInt(val);
+      if (num > 31) {
+        p = `${y}-${val[0].padStart(2, '0')}-${val[1].padStart(2, '0')}`;
+      } else {
+        p = `${y}-${m}-${val}`;
+      }
+    } else if (/^\d{1}$/.test(val)) {
       p = `${y}-${m}-${val.padStart(2, '0')}`;
     }
     if (p) {
@@ -228,27 +238,27 @@ const SmartDateInput = React.memo(({ label, value, onChange, onFocus, onBlur }) 
 
 const FilterChip = React.memo(({ label, isActive, onClick, count }) => (
   <button onClick={onClick}
-    className={`px-3.5 py-2 rounded-xl text-sm font-black flex items-center gap-1.5 transition-all whitespace-nowrap border ${isActive
+    className={`px-3.5 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 transition-all duration-200 whitespace-nowrap border ${isActive
       ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-200'
-      : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'}`}>
+      : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'}`}>
     {label}
     {count !== undefined && (
-      <span className={`text-xs px-1.5 py-0.5 rounded-full font-black ${isActive ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'}`}>{count}</span>
+      <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>{count}</span>
     )}
   </button>
 ));
 
 const NavItem = React.memo(({ icon, label, isActive, onClick, badge }) => (
-  <button onClick={onClick} className={`flex-1 py-2.5 flex flex-col items-center justify-center relative transition-all ${isActive ? 'text-blue-600' : 'text-gray-400'}`}>
+  <button onClick={onClick} className={`flex-1 py-3 flex flex-col items-center justify-center relative transition-all ${isActive ? 'text-blue-600' : 'text-gray-400'}`}>
     <div className={`transition-transform mb-1 ${isActive ? 'scale-110' : 'scale-100'}`}>
-      {React.cloneElement(icon, { size: 24, strokeWidth: isActive ? 2.5 : 2 })}
+      {React.cloneElement(icon, { size: 28, strokeWidth: isActive ? 2.5 : 2 })}
     </div>
     {badge > 0 && (
-      <span className="absolute top-1.5 right-[18%] bg-red-500 text-white text-[9px] font-black rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+      <span className="absolute top-2 right-[16%] bg-red-500 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
         {badge > 99 ? '99+' : badge}
       </span>
     )}
-    <span className="text-[10px] font-black">{label}</span>
+    <span className="text-xs font-black">{label}</span>
   </button>
 ));
 
@@ -261,11 +271,21 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('new');
   const [toast, setToast] = useState(null);
+  const [zoom, setZoom] = useState(() => Number(localStorage.getItem(STORAGE_KEY_ZOOM)) || 130);
 
+  const isHQ = workspace === HQ_CODE;
   const showToast = useCallback((message, type = 'error') => setToast({ message, type }), []);
 
   const uncheckedCount = useMemo(() =>
     records.filter(r => checkIsAdmitted(r) && !r.officeChecked).length, [records]);
+
+  const changeZoom = useCallback((delta) => {
+    setZoom(z => {
+      const next = Math.min(150, Math.max(70, z + delta));
+      localStorage.setItem(STORAGE_KEY_ZOOM, String(next));
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     signInAnonymously(auth).catch(console.error);
@@ -275,6 +295,37 @@ export default function App() {
   useEffect(() => {
     if (!user || !workspace) { setLoading(false); return; }
     setLoading(true);
+
+    if (workspace === HQ_CODE) {
+      const patientUnsubs = {};
+      const officeRecords = {};
+      const pushRecords = () => {
+        setRecords(Object.entries(officeRecords).flatMap(([office, recs]) =>
+          recs.map(r => ({ ...r, _office: office }))));
+      };
+      const unsubWs = onSnapshot(
+        collection(db, 'artifacts', APP_ID, 'public', 'data', 'workspaces'),
+        wsSnap => {
+          const offices = wsSnap.docs.map(d => d.id).filter(id => id !== HQ_CODE);
+          Object.keys(patientUnsubs).forEach(o => {
+            if (!offices.includes(o)) { patientUnsubs[o](); delete patientUnsubs[o]; delete officeRecords[o]; }
+          });
+          offices.forEach(o => {
+            if (patientUnsubs[o]) return;
+            patientUnsubs[o] = onSnapshot(
+              collection(db, 'artifacts', APP_ID, 'public', 'data', `${o}_patients`),
+              pSnap => { officeRecords[o] = pSnap.docs.map(d => ({ id: d.id, ...d.data() })); pushRecords(); },
+              console.error
+            );
+          });
+          pushRecords();
+          setLoading(false);
+        },
+        err => { console.error(err); setLoading(false); }
+      );
+      return () => { unsubWs(); Object.values(patientUnsubs).forEach(fn => fn()); };
+    }
+
     const unsubR = onSnapshot(
       collection(db, 'artifacts', APP_ID, 'public', 'data', `${workspace}_patients`),
       snap => { setRecords(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
@@ -289,15 +340,22 @@ export default function App() {
   }, [user, workspace]);
 
   const handleUpdateRecord = useCallback(async (data) => {
-    if (!user || !workspace) return;
+    if (!user) return;
+    const targetWs = isHQ ? data._office : workspace;
+    if (!targetWs) return;
     try {
-      await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', `${workspace}_patients`, data.id), { ...data, updatedAt: Date.now() }, { merge: true });
+      const { _office, ...clean } = data;
+      await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', `${targetWs}_patients`, clean.id), { ...clean, updatedAt: Date.now() }, { merge: true });
     } catch { showToast('保存に失敗しました'); }
-  }, [user, workspace, showToast]);
+  }, [user, workspace, isHQ, showToast]);
 
   const handleJoinWorkspace = useCallback((name) => {
     setWorkspace(name);
+    setActiveTab(name === HQ_CODE ? 'list' : 'new');
     localStorage.setItem(STORAGE_KEY_WORKSPACE, name);
+    if (name !== HQ_CODE) {
+      setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'workspaces', name), { name }, { merge: true }).catch(console.error);
+    }
   }, []);
 
   const handleLeaveWorkspace = useCallback(() => {
@@ -318,7 +376,7 @@ export default function App() {
   if (!workspace) return <WorkspaceSetupView onJoin={handleJoinWorkspace} />;
 
   return (
-    <div className="min-h-screen bg-gray-50 font-sans pb-24 text-gray-900">
+    <div className="min-h-screen bg-slate-50 font-sans pb-24 text-slate-900 print:bg-white print:pb-0" style={{ zoom: zoom / 100 }}>
       <style>{`
         @keyframes fadeInUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
         @keyframes slideDown { from { opacity:0; transform:translate(-50%,-16px); } to { opacity:1; transform:translate(-50%,0); } }
@@ -328,38 +386,42 @@ export default function App() {
         .no-scrollbar { -ms-overflow-style:none; scrollbar-width:none; }
       `}</style>
 
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      {toast && <div className="print:hidden"><Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} /></div>}
 
-      <header className="bg-blue-600 text-white px-4 py-3.5 shadow-md sticky top-0 z-40">
-        <div className="max-w-2xl mx-auto flex justify-between items-center">
-          <h1 className="font-black text-lg flex items-center gap-2">
-            <Building2 size={22} /> 入退院管理
+      <header className="bg-blue-600 text-white px-4 py-3 shadow-md sticky top-0 z-40 print:hidden">
+        <div className="max-w-4xl mx-auto flex justify-between items-center gap-2">
+          <h1 className="font-black text-base flex items-center gap-1.5 min-w-0">
+            <Building2 size={20} className="flex-shrink-0" />
+            <span className="truncate">{isHQ ? '本社管理' : '入退院管理フォーム'}</span>
           </h1>
-          <div className="flex items-center gap-2">
-            {uncheckedCount > 0 && (
-              <div className="bg-red-500 text-white text-xs font-black px-2.5 py-1 rounded-full flex items-center gap-1">
-                <Bell size={11} /> 未入力 {uncheckedCount}件
-              </div>
-            )}
-            <div className="text-xs font-bold bg-blue-700/50 px-3 py-1.5 rounded-full border border-blue-500/50">{workspace}</div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <div className="flex items-center bg-blue-700/50 rounded-lg border border-blue-500/50 overflow-hidden">
+              <button onClick={() => changeZoom(-10)} className="px-2 py-1.5 hover:bg-blue-800/50 transition-colors" aria-label="縮小"><Minus size={14} /></button>
+              <span className="text-[10px] font-black px-1 w-9 text-center">{zoom}%</span>
+              <button onClick={() => changeZoom(10)} className="px-2 py-1.5 hover:bg-blue-800/50 transition-colors" aria-label="拡大"><Plus size={14} /></button>
+            </div>
+            <div className="text-xs font-bold bg-blue-700/50 px-2.5 py-1.5 rounded-lg border border-blue-500/50">{workspace}</div>
+            <button onClick={handleLeaveWorkspace} className="flex items-center gap-1 text-xs font-black bg-blue-700/50 px-2.5 py-1.5 rounded-lg border border-blue-500/50 hover:bg-blue-800/60 transition-colors">
+              <LogOut size={13} /> ログアウト
+            </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto p-4 animate-fade-in-up">
-        {activeTab === 'new' && <NewRecordView user={user} workspace={workspace} staffs={staffs} onSuccess={() => setActiveTab('list')} showToast={showToast} />}
-        {activeTab === 'list' && <ListView user={user} workspace={workspace} records={records} staffs={staffs} showToast={showToast} onUpdate={handleUpdateRecord} />}
-        {activeTab === 'stats' && <StatsView staffs={staffs} records={records} onUpdate={handleUpdateRecord} />}
-        {activeTab === 'master' && <MasterView user={user} workspace={workspace} staffs={staffs} showToast={showToast} onLeave={handleLeaveWorkspace} />}
+      <main className="max-w-4xl mx-auto p-4 animate-fade-in-up">
+        {activeTab === 'new' && !isHQ && <NewRecordView user={user} workspace={workspace} staffs={staffs} records={records} onSuccess={() => setActiveTab('list')} onUpdate={handleUpdateRecord} showToast={showToast} />}
+        {activeTab === 'list' && <ListView user={user} workspace={workspace} records={records} staffs={staffs} isHQ={isHQ} showToast={showToast} onUpdate={handleUpdateRecord} onGoNew={() => setActiveTab('new')} />}
+        {activeTab === 'stats' && <StatsView staffs={staffs} records={records} isHQ={isHQ} onUpdate={handleUpdateRecord} />}
+        {activeTab === 'master' && !isHQ && <MasterView user={user} workspace={workspace} staffs={staffs} showToast={showToast} onLeave={handleLeaveWorkspace} />}
         {activeTab === 'help' && <HelpView workspace={workspace} />}
       </main>
 
-      <nav className="fixed bottom-0 w-full bg-white border-t border-gray-200 shadow-[0_-2px_12px_rgba(0,0,0,0.06)] z-40">
-        <div className="max-w-2xl mx-auto flex justify-around py-1">
-          <NavItem icon={<FilePlus />} label="新規入力" isActive={activeTab === 'new'} onClick={() => setActiveTab('new')} />
+      <nav className="fixed bottom-0 w-full bg-white border-t border-slate-200 shadow-[0_-2px_12px_rgba(0,0,0,0.06)] z-40 print:hidden">
+        <div className="max-w-4xl mx-auto flex justify-around py-1.5">
+          {!isHQ && <NavItem icon={<FilePlus />} label="新規入力" isActive={activeTab === 'new'} onClick={() => setActiveTab('new')} />}
           <NavItem icon={<LayoutList />} label="一覧" isActive={activeTab === 'list'} onClick={() => setActiveTab('list')} badge={uncheckedCount} />
           <NavItem icon={<BarChart3 />} label="集計" isActive={activeTab === 'stats'} onClick={() => setActiveTab('stats')} />
-          <NavItem icon={<Settings />} label="マスタ" isActive={activeTab === 'master'} onClick={() => setActiveTab('master')} />
+          {!isHQ && <NavItem icon={<Settings />} label="マスタ" isActive={activeTab === 'master'} onClick={() => setActiveTab('master')} />}
           <NavItem icon={<HelpCircle />} label="使い方" isActive={activeTab === 'help'} onClick={() => setActiveTab('help')} />
         </div>
       </nav>
@@ -368,24 +430,51 @@ export default function App() {
 }
 
 // --- Workspace Setup ---
+const WORKSPACE_PASSWORD = 'TSS250';
+const HQ_PASSWORD = 'TSS000';
+
 function WorkspaceSetupView({ onJoin }) {
   const [inputName, setInputName] = useState('');
+  const [inputPass, setInputPass] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const code = inputName.trim();
+    if (!code) return;
+    const expected = code === HQ_CODE ? HQ_PASSWORD : WORKSPACE_PASSWORD;
+    if (inputPass !== expected) {
+      setError('パスワードが違います');
+      return;
+    }
+    onJoin(code);
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex justify-center items-center p-4">
-      <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm animate-fade-in-up">
-        <div className="flex justify-center mb-6">
-          <div className="w-20 h-20 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600">
-            <Building2 size={44} strokeWidth={1.5} />
+    <div className="min-h-screen bg-white flex justify-center items-center p-4">
+      <div className="bg-white p-6 rounded-2xl shadow-xl border border-gray-200 w-full max-w-xs animate-fade-in-up">
+        <div className="flex justify-center mb-4">
+          <div className="w-14 h-14 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
+            <Building2 size={30} strokeWidth={1.5} />
           </div>
         </div>
-        <h1 className="text-2xl font-black text-center text-gray-800 mb-1">営業所グループ</h1>
-        <p className="text-center text-gray-400 text-sm font-medium mb-7">営業所名を入力してください</p>
-        <form onSubmit={e => { e.preventDefault(); if (inputName.trim()) onJoin(inputName.trim()); }} className="space-y-4">
-          <input type="text" value={inputName} onChange={e => setInputName(e.target.value)} placeholder="例: 行橋営業所"
-            className="w-full p-4 border-2 border-gray-200 rounded-2xl text-lg font-black outline-none focus:border-blue-500 bg-gray-50 transition-all" autoFocus />
-          <button type="submit" disabled={!inputName.trim()}
-            className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 shadow-lg active:scale-95 transition-all">
-            この営業所を選択
+        <h1 className="text-lg font-black text-center text-gray-800 mb-1">入退院管理フォーム</h1>
+        <p className="text-center text-gray-400 text-xs font-medium mb-5">コードとパスワードを入力してください</p>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="text-xs font-black text-gray-500 mb-1 block">コード（営業所名）</label>
+            <input type="text" value={inputName} onChange={e => setInputName(e.target.value)} placeholder="例: 行橋"
+              className="w-full p-3 border-2 border-gray-200 rounded-xl text-base font-black outline-none focus:border-blue-500 bg-gray-50 transition-all" autoFocus />
+          </div>
+          <div>
+            <label className="text-xs font-black text-gray-500 mb-1 block">パスワード</label>
+            <input type="password" value={inputPass} onChange={e => { setInputPass(e.target.value); setError(''); }} placeholder="パスワードを入力"
+              className="w-full p-3 border-2 border-gray-200 rounded-xl text-base font-black outline-none focus:border-blue-500 bg-gray-50 transition-all" />
+          </div>
+          {error && <p className="text-xs text-red-500 font-bold text-center">{error}</p>}
+          <button type="submit" disabled={!inputName.trim() || !inputPass}
+            className="w-full bg-blue-600 text-white py-3 rounded-xl font-black text-base hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 shadow-lg active:scale-95 transition-all">
+            ログイン
           </button>
         </form>
       </div>
@@ -394,15 +483,40 @@ function WorkspaceSetupView({ onJoin }) {
 }
 
 // --- New Record View ---
-function NewRecordView({ user, workspace, staffs, onSuccess, showToast }) {
-  const initForm = { id: null, staff: '', patientName: '', admissionDate: '', admissionPlanned: false, dischargeDate: '', dischargePlanned: false, remarks: '', officeChecked: false, officeCheckedAt: '', dischargeProspect: false, amount: 0 };
+function NewRecordView({ user, workspace, staffs, records, onSuccess, onUpdate, showToast }) {
+  const savedStaff = localStorage.getItem(STORAGE_KEY_STAFF) || '';
+  const [mode, setMode] = useState('admit');
+  const initForm = { id: null, staff: savedStaff, patientName: '', admissionDate: '', admissionPlanned: false, dischargeDate: '', dischargePlanned: false, remarks: '', officeChecked: false, officeCheckedAt: '', dischargeProspect: false, amount: 0 };
   const [form, setForm] = useState({ ...initForm });
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
+  const [dStaff, setDStaff] = useState(savedStaff);
+  const [dPatientId, setDPatientId] = useState('');
+  const [dDate, setDDate] = useState('');
+  const [dPlanned, setDPlanned] = useState(false);
+  const [dSaving, setDSaving] = useState(false);
+  const [dSearch, setDSearch] = useState('');
+  const [dDaysFilter, setDDaysFilter] = useState('ALL');
+  const [dAmount, setDAmount] = useState(0);
+
   useEffect(() => {
-    if (!form.staff && staffs.length > 0) set('staff', staffs[0]);
-  }, [staffs, form.staff]);
+    if (!form.staff && staffs.length > 0) {
+      set('staff', savedStaff && staffs.includes(savedStaff) ? savedStaff : staffs[0]);
+    }
+    if (!dStaff && staffs.length > 0) {
+      setDStaff(savedStaff && staffs.includes(savedStaff) ? savedStaff : staffs[0]);
+    }
+  }, [staffs]);
+
+  const chooseStaff = (s) => {
+    set('staff', s);
+    localStorage.setItem(STORAGE_KEY_STAFF, s);
+  };
+  const chooseDStaff = (s) => {
+    setDStaff(s);
+    localStorage.setItem(STORAGE_KEY_STAFF, s);
+  };
 
   const handleSave = async () => {
     if (!user) return;
@@ -414,78 +528,241 @@ function NewRecordView({ user, workspace, staffs, onSuccess, showToast }) {
         ...form, id, staff: form.staff || staffs[0] || '',
         amount: Number(form.amount) || 0, createdAt: form.createdAt || Date.now(), updatedAt: Date.now()
       });
-      setForm({ ...initForm, staff: staffs[0] || '' });
+      setForm({ ...initForm, staff: form.staff });
       showToast('保存しました', 'success');
       onSuccess();
     } catch { showToast('エラーが発生しました'); }
     finally { setSaving(false); }
   };
 
+  const dischargeCandidates = useMemo(() =>
+    records.filter(r => {
+      if (!checkIsAdmitted(r) || r.dischargeDate) return false;
+      if (dStaff && r.staff !== dStaff) return false;
+      if (dSearch && !r.patientName?.toLowerCase().includes(dSearch.toLowerCase())) return false;
+      if (dDaysFilter !== 'ALL') {
+        const days = calculateDaysFromAdmission(r.admissionDate);
+        if (dDaysFilter === '30' && days > 30) return false;
+        if (dDaysFilter === '60' && (days <= 30 || days > 60)) return false;
+        if (dDaysFilter === '90' && (days <= 60 || days > 90)) return false;
+        if (dDaysFilter === 'OVER_90' && days <= 90) return false;
+      }
+      return true;
+    }).sort((a, b) => new Date(b.admissionDate || 0) - new Date(a.admissionDate || 0)),
+    [records, dStaff, dSearch, dDaysFilter]);
+
+  const handleDischargeSave = async () => {
+    if (!dPatientId) return showToast('退院する方を選択してください');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dDate)) return showToast('退院日を入力してください');
+    const target = records.find(r => r.id === dPatientId);
+    if (!target) return;
+    setDSaving(true);
+    try {
+      await onUpdate({ ...target, dischargeDate: dDate, dischargePlanned: dPlanned, amount: dAmount || target.amount || 0 });
+      showToast('退院日を登録しました', 'success');
+      setDPatientId(''); setDDate(''); setDPlanned(false); setDAmount(0);
+      onSuccess();
+    } catch { showToast('エラーが発生しました'); }
+    finally { setDSaving(false); }
+  };
+
+  const handleExpandPatient = (id) => {
+    if (dPatientId === id) {
+      setDPatientId('');
+      setDDate('');
+      setDPlanned(false);
+      setDAmount(0);
+    } else {
+      const target = records.find(r => r.id === id);
+      setDPatientId(id);
+      setDDate('');
+      setDPlanned(false);
+      setDAmount(target?.amount || 0);
+    }
+  };
+
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-      <div className="bg-gradient-to-r from-blue-600 to-blue-500 px-5 py-4">
-        <h2 className="font-black text-white text-lg flex items-center gap-2"><FilePlus size={20} /> 新規データ入力</h2>
-        <p className="text-blue-100 text-xs font-medium mt-0.5">入院・入所の情報を登録します</p>
-      </div>
-      <div className="p-5 space-y-5">
-        {/* 顧客名 */}
-        <div className="space-y-1.5">
-          <label className="text-sm font-black text-gray-700">顧客名 <span className="text-red-500">*</span></label>
-          <input type="text" value={form.patientName} onChange={e => set('patientName', e.target.value)} placeholder="山田 太郎"
-            className="w-full p-4 border-2 border-gray-200 rounded-xl font-black text-lg outline-none focus:border-blue-500 hover:border-gray-300 transition-all" />
-        </div>
-
-        {/* 担当者 */}
-        <div className="space-y-1.5">
-          <label className="text-sm font-black text-gray-700">担当者</label>
-          <div className="flex flex-wrap gap-2">
-            {staffs.map(s => (
-              <button key={s} type="button" onClick={() => set('staff', s)}
-                className={`px-4 py-2.5 rounded-xl text-sm font-black border-2 transition-all ${form.staff === s ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-200' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'}`}>
-                {s}
-              </button>
-            ))}
-            {staffs.length === 0 && <p className="text-sm text-gray-400 font-medium">マスタから担当者を登録してください</p>}
-          </div>
-        </div>
-
-        {/* 入院日 */}
-        <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
-          <SmartDateInput label="入院・入所日" value={form.admissionDate} onChange={v => set('admissionDate', v)} />
-          <label className="flex items-center gap-2 text-sm font-bold text-gray-500 cursor-pointer">
-            <input type="checkbox" checked={form.admissionPlanned} onChange={e => set('admissionPlanned', e.target.checked)} className="w-4 h-4 accent-blue-600" />
-            予定日として登録
-          </label>
-        </div>
-
-        {/* 退院日 */}
-        <div className="p-4 bg-orange-50/60 rounded-xl border border-orange-100 space-y-2">
-          <SmartDateInput label="退院・退所日" value={form.dischargeDate} onChange={v => set('dischargeDate', v)} />
-          <label className="flex items-center gap-2 text-sm font-bold text-gray-500 cursor-pointer">
-            <input type="checkbox" checked={form.dischargePlanned} onChange={e => set('dischargePlanned', e.target.checked)} className="w-4 h-4 accent-orange-600" />
-            予定日として登録
-          </label>
-        </div>
-
-        {/* 請求額 */}
-        <div className="space-y-1.5">
-          <label className="text-sm font-black text-gray-700 flex items-center gap-2">
-            請求額 <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded font-bold">任意</span>
-          </label>
-          <div className="relative">
-            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-black">¥</span>
-            <input type="number" value={form.amount || ''} onChange={e => set('amount', Number(e.target.value))} placeholder="0"
-              className="w-full p-4 pl-8 border-2 border-gray-200 rounded-xl font-black outline-none focus:border-blue-400 hover:border-gray-300 transition-all" />
-          </div>
-        </div>
-
-        <button onClick={handleSave} disabled={saving}
-          className="w-full bg-blue-600 text-white py-4 rounded-xl font-black text-lg shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 disabled:opacity-60 transition-all flex items-center justify-center gap-2">
-          {saving
-            ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />保存中...</>
-            : <><Save size={20} />保存して登録</>}
+      {/* モード切替 */}
+      <div className="flex border-b border-gray-100">
+        <button onClick={() => setMode('admit')}
+          className={`flex-1 py-3.5 font-black text-sm flex items-center justify-center gap-1.5 transition-colors ${mode === 'admit' ? 'bg-blue-600 text-white' : 'bg-white text-gray-400 hover:bg-gray-50'}`}>
+          <FilePlus size={17} /> 新規入院
+        </button>
+        <button onClick={() => setMode('discharge')}
+          className={`flex-1 py-3.5 font-black text-sm flex items-center justify-center gap-1.5 transition-colors ${mode === 'discharge' ? 'bg-blue-600 text-white' : 'bg-white text-gray-400 hover:bg-gray-50'}`}>
+          <Calendar size={17} /> 退院入力
         </button>
       </div>
+
+      {mode === 'admit' ? (
+        <form onSubmit={(e) => { e.preventDefault(); handleSave(); }} className="p-5 space-y-5">
+          {/* 顧客名 */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-semibold text-slate-700">顧客名 <span className="text-red-500">*</span></label>
+            <input type="text" value={form.patientName} onChange={e => set('patientName', e.target.value)}
+              placeholder="山田 太郎"
+              className="w-full p-4 border-2 border-slate-200 rounded-xl font-bold text-lg outline-none focus:border-blue-500 hover:border-slate-300 transition-all" />
+          </div>
+
+          {/* 担当者 */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-semibold text-slate-700">担当者</label>
+            <div className="flex flex-wrap gap-2">
+              {staffs.map(s => (
+                <button key={s} type="button" onClick={() => chooseStaff(s)}
+                  className={`px-4 py-2.5 rounded-xl text-sm font-bold border-2 transition-all ${form.staff === s ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-200' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+                  {s}
+                </button>
+              ))}
+              {staffs.length === 0 && <p className="text-sm text-slate-400 font-medium">マスタから担当者を登録してください</p>}
+            </div>
+          </div>
+
+          {/* 入院日 */}
+          <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
+            <SmartDateInput label="入院・入所日" value={form.admissionDate} onChange={v => set('admissionDate', v)} />
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-500 cursor-pointer">
+              <input type="checkbox" checked={form.admissionPlanned} onChange={e => set('admissionPlanned', e.target.checked)} className="w-4 h-4 accent-blue-600" />
+              予定日として登録
+            </label>
+          </div>
+
+          {/* 請求額 */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              請求額 <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded font-medium">任意</span>
+            </label>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">¥</span>
+              <input type="number" value={form.amount || ''} onChange={e => set('amount', Number(e.target.value))}
+                placeholder="0"
+                className="w-full p-4 pl-8 border-2 border-slate-200 rounded-xl font-bold outline-none focus:border-blue-400 hover:border-slate-300 transition-all" />
+            </div>
+          </div>
+
+          <button type="submit" disabled={saving}
+            className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 disabled:opacity-60 transition-all flex items-center justify-center gap-2">
+            {saving
+              ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />保存中...</>
+              : <><Save size={20} />保存して登録</>}
+          </button>
+          <p className="text-xs text-slate-400 text-center font-medium">💡 入力後 Enter キーでも登録できます</p>
+        </form>
+      ) : (
+        <div className="p-5 space-y-4">
+          {/* 検索バー */}
+          <div className="relative">
+            <Search size={17} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input type="text" value={dSearch} onChange={e => setDSearch(e.target.value)} placeholder="顧客名で検索..."
+              className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-blue-400 hover:border-slate-300 transition-all bg-slate-50" />
+          </div>
+
+          {/* 担当者フィルター */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-500">担当者</label>
+            <div className="flex flex-wrap gap-2">
+              {staffs.map(s => (
+                <button key={s} type="button" onClick={() => chooseDStaff(dStaff === s ? '' : s)}
+                  className={`px-3.5 py-2 rounded-xl text-sm font-bold border transition-all ${dStaff === s ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-200' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+                  {s}
+                </button>
+              ))}
+              {staffs.length === 0 && <p className="text-sm text-slate-400 font-medium">マスタから担当者を登録してください</p>}
+            </div>
+          </div>
+
+          {/* 経過日数フィルター */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-500">経過日数</label>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { id: 'ALL', label: 'すべて' },
+                { id: '30', label: '30日以内' },
+                { id: '60', label: '60日以内' },
+                { id: '90', label: '90日以内' },
+                { id: 'OVER_90', label: '90日以上' },
+              ].map(f => (
+                <button key={f.id} type="button" onClick={() => setDDaysFilter(f.id)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${dDaysFilter === f.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 退院する方を選択（アコーディオン） */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-semibold text-slate-700">退院する方を選択 <span className="text-red-500">*</span>
+              <span className="text-xs text-slate-400 font-medium ml-2">({dischargeCandidates.length}名)</span>
+            </label>
+            {dischargeCandidates.length > 0 ? (
+              <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+                {dischargeCandidates.map(p => {
+                  const days = calculateDaysFromAdmission(p.admissionDate);
+                  const daysInfo = getDaysInfo(days);
+                  const isExpanded = dPatientId === p.id;
+                  return (
+                    <div key={p.id} className={`rounded-xl border-2 transition-all overflow-hidden ${isExpanded ? 'border-blue-500 shadow-md shadow-blue-100' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}>
+                      {/* カード本体（全域クリック） */}
+                      <div onClick={() => handleExpandPatient(p.id)}
+                        className="flex items-center justify-between p-3 cursor-pointer">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-bold text-slate-800 truncate">{p.patientName}</span>
+                          <span className="text-xs text-slate-400 font-medium flex-shrink-0">{p.staff}</span>
+                          {days >= 0 && (
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${daysInfo.bg}`}>{days}日目</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {p.amount > 0 && (
+                            <span className="text-xs text-slate-500 font-medium">請求金額 {formatCurrency(p.amount)}</span>
+                          )}
+                          <div className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs">
+                            <span className="text-xs text-slate-400 font-medium">
+                              入院 {formatJapaneseDate(p.admissionDate)}
+                            </span>
+                          </div>
+                          {isExpanded
+                            ? <ChevronDown size={16} className="text-blue-500" />
+                            : <ChevronRight size={16} className="text-slate-400" />}
+                        </div>
+                      </div>
+
+                      {/* 展開エリア（インライン入力） */}
+                      {isExpanded && (
+                        <div className="border-t border-blue-200 bg-blue-50/50 p-4 space-y-3 animate-fade-in-up">
+                          <SmartDateInput label="退院・退所日" value={dDate} onChange={setDDate} />
+                          <label className="flex items-center gap-2 text-sm font-medium text-slate-500 cursor-pointer">
+                            <input type="checkbox" checked={dPlanned} onChange={e => setDPlanned(e.target.checked)} className="w-4 h-4 accent-blue-600" />
+                            予定日として登録
+                          </label>
+                          <div className="space-y-1">
+                            <label className="text-sm font-semibold text-slate-600">請求金額</label>
+                            <div className="relative">
+                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">¥</span>
+                              <input type="number" value={dAmount || ''} onChange={e => setDAmount(Number(e.target.value))} placeholder="0"
+                                className="w-full p-3 pl-7 border-2 border-slate-200 rounded-xl font-bold outline-none focus:border-blue-400 hover:border-slate-300 transition-all bg-white" />
+                            </div>
+                          </div>
+                          <button onClick={handleDischargeSave} disabled={dSaving}
+                            className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 disabled:opacity-60 transition-all flex items-center justify-center gap-2">
+                            {dSaving
+                              ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />保存中...</>
+                              : <><Save size={16} />退院情報を登録</>}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400 font-medium py-6 text-center bg-slate-50 rounded-xl">入院中の方がいません</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -495,74 +772,97 @@ const PatientCard = React.memo(({ record, onEdit, onUpdate }) => {
   const days = calculateDaysFromAdmission(record.admissionDate);
   const { bg } = getDaysInfo(days);
 
-  const handleToggle = useCallback(() => {
+  const handleToggle = useCallback((e) => {
+    e.stopPropagation();
     onUpdate({ ...record, officeChecked: !record.officeChecked, officeCheckedAt: !record.officeChecked ? formatTimestamp() : '' });
   }, [record, onUpdate]);
 
   return (
-    <div className={`bg-white rounded-2xl border-2 shadow-sm transition-all ${record.officeChecked ? 'border-gray-100 opacity-70' : 'border-gray-200 hover:border-blue-200 hover:shadow-md'}`}>
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="flex-1 min-w-0">
-            <button onClick={() => onEdit(record)} className="text-left font-black text-gray-800 text-base hover:text-blue-600 flex items-center gap-1 group transition-colors">
-              <span className="truncate">{record.patientName}</span>
-              <ChevronRight size={15} className="text-gray-300 group-hover:text-blue-400 flex-shrink-0 transition-all group-hover:translate-x-0.5" />
-            </button>
-            <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <span className="text-xs text-gray-400 font-bold">{record.staff}</span>
-              {days >= 0 && (
-                <span className={`text-xs font-black px-2 py-0.5 rounded-full border ${bg}`}>{days}日目</span>
-              )}
-            </div>
+    <div
+      onClick={() => onEdit(record)}
+      className={`bg-white rounded-xl border shadow-sm transition-all duration-200 cursor-pointer ${record.officeChecked ? 'border-slate-100 opacity-70' : 'border-slate-200 hover:border-blue-300 hover:shadow-md hover:bg-slate-50/50'}`}
+    >
+      <div className="p-3">
+        {/* 上段: 名前・担当・日数 | ステータス・矢印 */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-bold text-slate-800 text-base truncate">{record.patientName}</span>
+            {record._office && (
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 flex-shrink-0">{record._office}</span>
+            )}
+            <span className="text-xs text-slate-400 font-medium flex-shrink-0">{record.staff}</span>
+            {days >= 0 && (
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${bg}`}>{days}日目</span>
+            )}
           </div>
-          <button onClick={handleToggle}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black border transition-all flex-shrink-0 ${record.officeChecked
-              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-              : 'bg-red-500 text-white border-red-500 hover:bg-red-600 shadow-sm shadow-red-200'}`}>
-            {record.officeChecked ? <CheckCircle2 size={13} /> : <AlertIcon size={13} />}
-            {record.officeChecked ? '入力済' : '未入力'}
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button onClick={handleToggle}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${record.officeChecked
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                : 'bg-red-500 text-white border-red-500 hover:bg-red-600 shadow-sm shadow-red-200'}`}>
+              {record.officeChecked ? <CheckCircle2 size={12} /> : <AlertIcon size={12} />}
+              {record.officeChecked ? '入力済' : '未入力'}
+            </button>
+            <ChevronRight size={16} className="text-slate-300" />
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-1.5 text-xs">
+        {/* 下段: 入院日・退院日・請求金額 */}
+        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
           {record.admissionDate && (
-            <span className="flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded-lg font-bold border border-blue-100">
+            <span className="flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium border border-blue-100">
               <Calendar size={10} />入院: {formatJapaneseDate(record.admissionDate)}{record.admissionPlanned && <span className="opacity-60">(予)</span>}
             </span>
           )}
           {record.dischargeDate && (
-            <span className="flex items-center gap-1 px-2 py-1 bg-orange-50 text-orange-700 rounded-lg font-bold border border-orange-100">
+            <span className="flex items-center gap-1 px-2 py-0.5 bg-orange-50 text-orange-700 rounded text-xs font-medium border border-orange-100">
               <Calendar size={10} />退院: {formatJapaneseDate(record.dischargeDate)}{record.dischargePlanned && <span className="opacity-60">(予)</span>}
             </span>
           )}
           {record.amount > 0 && (
-            <span className="px-2 py-1 bg-gray-50 text-gray-600 rounded-lg font-bold border border-gray-100">{formatCurrency(record.amount)}</span>
+            <span className="px-2 py-0.5 bg-slate-50 text-slate-600 rounded text-xs font-medium border border-slate-100">請求金額 {formatCurrency(record.amount)}</span>
+          )}
+          {record.officeChecked && record.officeCheckedAt && (
+            <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded text-xs font-medium border border-emerald-100">
+              <CheckCircle2 size={10} />{record.officeCheckedAt}
+            </span>
           )}
         </div>
-
-        {record.officeChecked && record.officeCheckedAt && (
-          <p className="text-[10px] text-emerald-500 font-bold mt-2">✓ {record.officeCheckedAt} に入力完了</p>
-        )}
       </div>
     </div>
   );
 });
 
 // --- List View ---
-function ListView({ user, workspace, records, staffs, showToast, onUpdate }) {
+function ListView({ user, workspace, records, staffs, isHQ, showToast, onUpdate, onGoNew }) {
   const [filterStaff, setFilterStaff] = useState('全て');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [filterDays, setFilterDays] = useState(0);
+  const [sortBy, setSortBy] = useState('date');
   const [searchText, setSearchText] = useState('');
   const [includeDischarged, setIncludeDischarged] = useState(false);
   const [editingRecord, setEditingRecord] = useState(null);
 
-  const filtered = useMemo(() => records.filter(r => {
-    const matchStaff = filterStaff === '全て' || r.staff === filterStaff;
-    const matchStatus = filterStatus === 'all' || !r.officeChecked;
-    const matchSearch = !searchText || r.patientName?.toLowerCase().includes(searchText.toLowerCase());
-    const matchAdmitted = includeDischarged || checkIsAdmitted(r);
-    return matchStaff && matchStatus && matchSearch && matchAdmitted;
-  }).sort((a, b) => new Date(b.admissionDate || 0) - new Date(a.admissionDate || 0)), [records, filterStaff, filterStatus, includeDischarged, searchText]);
+  const offices = useMemo(() =>
+    isHQ ? [...new Set(records.map(r => r._office).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ja')) : [],
+    [records, isHQ]);
+
+  const filtered = useMemo(() => {
+    const list = records.filter(r => {
+      const matchStaff = filterStaff === '全て' || (isHQ ? r._office === filterStaff : r.staff === filterStaff);
+      const matchStatus = filterStatus === 'all' || !r.officeChecked;
+      const matchSearch = !searchText || r.patientName?.toLowerCase().includes(searchText.toLowerCase());
+      const matchAdmitted = includeDischarged || checkIsAdmitted(r);
+      const matchDays = filterDays === 0 || calculateDaysFromAdmission(r.admissionDate) >= filterDays;
+      return matchStaff && matchStatus && matchSearch && matchAdmitted && matchDays;
+    });
+    list.sort((a, b) => {
+      if (sortBy === 'days') return calculateDaysFromAdmission(b.admissionDate) - calculateDaysFromAdmission(a.admissionDate);
+      if (sortBy === 'staff') return (a.staff || '').localeCompare(b.staff || '', 'ja');
+      return new Date(b.admissionDate || 0) - new Date(a.admissionDate || 0);
+    });
+    return list;
+  }, [records, filterStaff, filterStatus, filterDays, sortBy, includeDischarged, searchText, isHQ]);
 
   const summary = useMemo(() => {
     const admitted = records.filter(r => checkIsAdmitted(r));
@@ -571,33 +871,39 @@ function ListView({ user, workspace, records, staffs, showToast, onUpdate }) {
 
   return (
     <div className="space-y-3">
+      {!isHQ && (
+        <button onClick={onGoNew}
+          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3.5 rounded-2xl font-black text-base shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 transition-all">
+          <FilePlus size={20} /> 新規入力・退院入力へ
+        </button>
+      )}
       {/* Summary */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm">
-          <div className="text-2xl font-black text-gray-800">{summary.total}<span className="text-sm font-bold text-gray-400 ml-1">名</span></div>
-          <div className="text-xs font-bold text-gray-400 mt-0.5">入院中</div>
+        <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+          <div className="text-2xl font-bold text-slate-800">{summary.total}<span className="text-sm font-medium text-slate-400 ml-1">名</span></div>
+          <div className="text-xs font-medium text-slate-400 mt-0.5">入院中</div>
         </div>
         <div className={`rounded-2xl p-4 border shadow-sm ${summary.unchecked > 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'}`}>
-          <div className={`text-2xl font-black ${summary.unchecked > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-            {summary.unchecked}<span className="text-sm font-bold opacity-60 ml-1">件</span>
+          <div className={`text-2xl font-bold ${summary.unchecked > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+            {summary.unchecked}<span className="text-sm font-medium opacity-60 ml-1">件</span>
           </div>
-          <div className={`text-xs font-bold mt-0.5 ${summary.unchecked > 0 ? 'text-red-400' : 'text-emerald-500'}`}>
+          <div className={`text-xs font-medium mt-0.5 ${summary.unchecked > 0 ? 'text-red-400' : 'text-emerald-500'}`}>
             {summary.unchecked > 0 ? 'れん太 未入力' : 'れん太 全員完了 ✓'}
           </div>
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+      {/* Filters - Sticky for 14-inch laptop */}
+      <div className="bg-white/95 backdrop-blur rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3 sticky top-16 z-30">
         <div className="relative">
-          <Search size={17} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={17} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="顧客名で検索..."
-            className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl text-sm font-bold outline-none focus:border-blue-400 hover:border-gray-300 transition-all bg-gray-50" />
+            className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-blue-400 hover:border-slate-300 transition-all bg-slate-50" />
         </div>
         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-0.5">
-          <FilterChip label="全員" isActive={filterStaff === '全て'} onClick={() => setFilterStaff('全て')} />
-          {staffs.map(s => {
-            const cnt = records.filter(r => r.staff === s && checkIsAdmitted(r)).length;
+          <FilterChip label={isHQ ? '全営業所' : '全員'} isActive={filterStaff === '全て'} onClick={() => setFilterStaff('全て')} />
+          {(isHQ ? offices : staffs).map(s => {
+            const cnt = records.filter(r => (isHQ ? r._office === s : r.staff === s) && checkIsAdmitted(r)).length;
             return <FilterChip key={s} label={s} isActive={filterStaff === s} onClick={() => setFilterStaff(s)} count={cnt} />;
           })}
         </div>
@@ -605,9 +911,26 @@ function ListView({ user, workspace, records, staffs, showToast, onUpdate }) {
           <FilterChip label="全て" isActive={filterStatus === 'all'} onClick={() => setFilterStatus('all')} />
           <FilterChip label="未入力のみ" isActive={filterStatus === 'unconfirmed'} onClick={() => setFilterStatus('unconfirmed')} />
           <button onClick={() => setIncludeDischarged(!includeDischarged)}
-            className={`px-3.5 py-2 rounded-xl text-sm font-black border-2 transition-all ${includeDischarged ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'}`}>
+            className={`px-3.5 py-2 rounded-xl text-sm font-bold border transition-all duration-200 ${includeDischarged ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}>
             {includeDischarged ? '退院済含む ✓' : '退院済を含める'}
           </button>
+        </div>
+        <div className="border-t border-slate-100 pt-3">
+          <div className="text-xs font-semibold text-slate-400 mb-2">入院日数でしぼり込み</div>
+          <div className="flex gap-2 flex-wrap">
+            <FilterChip label="全期間" isActive={filterDays === 0} onClick={() => setFilterDays(0)} />
+            <FilterChip label="30日以上" isActive={filterDays === 30} onClick={() => setFilterDays(30)} />
+            <FilterChip label="60日以上" isActive={filterDays === 60} onClick={() => setFilterDays(60)} />
+            <FilterChip label="90日以上" isActive={filterDays === 90} onClick={() => setFilterDays(90)} />
+          </div>
+        </div>
+        <div className="border-t border-slate-100 pt-3">
+          <div className="text-xs font-semibold text-slate-400 mb-2">並び替え</div>
+          <div className="flex gap-2 flex-wrap">
+            <FilterChip label="新しい順" isActive={sortBy === 'date'} onClick={() => setSortBy('date')} />
+            <FilterChip label="入院日数が長い順" isActive={sortBy === 'days'} onClick={() => setSortBy('days')} />
+            <FilterChip label="担当者順" isActive={sortBy === 'staff'} onClick={() => setSortBy('staff')} />
+          </div>
         </div>
       </div>
 
@@ -626,7 +949,8 @@ function ListView({ user, workspace, records, staffs, showToast, onUpdate }) {
         <EditModal record={editingRecord} staffs={staffs} onClose={() => setEditingRecord(null)}
           onSave={data => { onUpdate(data); setEditingRecord(null); }}
           onDelete={async id => {
-            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', `${workspace}_patients`, id));
+            const ws = editingRecord._office || workspace;
+            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', `${ws}_patients`, id));
             setEditingRecord(null);
           }}
         />
@@ -715,7 +1039,7 @@ function EditModal({ record, staffs, onClose, onSave, onDelete }) {
                 <label className="text-xs font-black text-gray-500">担当者</label>
                 <select value={form.staff} onChange={e => set('staff', e.target.value)}
                   className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm font-bold outline-none focus:border-blue-400 bg-white transition-all h-[46px]">
-                  {staffs.map(s => <option key={s} value={s}>{s}</option>)}
+                  {[...new Set([form.staff, ...staffs].filter(Boolean))].map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
             </div>
@@ -739,9 +1063,10 @@ function EditModal({ record, staffs, onClose, onSave, onDelete }) {
 }
 
 // --- Stats View ---
-function StatsView({ staffs, records, onUpdate }) {
+function StatsView({ staffs, records, isHQ, onUpdate }) {
   const [expandedPeriod, setExpandedPeriod] = useState(null);
   const [filterStaff, setFilterStaff] = useState('全て');
+  const [printScope, setPrintScope] = useState('all');
 
   const stats = useMemo(() => {
     const admitted = records.filter(r => checkIsAdmitted(r) && (filterStaff === '全て' || r.staff === filterStaff));
@@ -771,28 +1096,54 @@ function StatsView({ staffs, records, onUpdate }) {
 
   return (
     <div className="space-y-4 animate-fade-in-up">
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-        <div className="flex gap-2 overflow-x-auto no-scrollbar">
-          <FilterChip label="全員" isActive={filterStaff === '全て'} onClick={() => setFilterStaff('全て')} />
-          {staffs.map(s => <FilterChip key={s} label={s} isActive={filterStaff === s} onClick={() => setFilterStaff(s)} />)}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 print:hidden space-y-3">
+        {!isHQ && (
+          <div className="flex gap-2 overflow-x-auto no-scrollbar">
+            <FilterChip label="全員" isActive={filterStaff === '全て'} onClick={() => setFilterStaff('全て')} />
+            {staffs.map(s => <FilterChip key={s} label={s} isActive={filterStaff === s} onClick={() => setFilterStaff(s)} />)}
+          </div>
+        )}
+        <div>
+          <div className="text-xs font-black text-gray-400 mb-2">印刷する期間をえらぶ</div>
+          <div className="flex gap-2 flex-wrap">
+            <FilterChip label="全期間" isActive={printScope === 'all'} onClick={() => setPrintScope('all')} />
+            <FilterChip label="〜30日" isActive={printScope === 'under30'} onClick={() => setPrintScope('under30')} />
+            <FilterChip label="〜60日" isActive={printScope === 'under60'} onClick={() => setPrintScope('under60')} />
+            <FilterChip label="〜90日" isActive={printScope === 'under90'} onClick={() => setPrintScope('under90')} />
+            <FilterChip label="90日〜" isActive={printScope === 'over90'} onClick={() => setPrintScope('over90')} />
+          </div>
         </div>
+        <button onClick={() => window.print()}
+          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-xl font-black text-sm hover:bg-blue-700 active:scale-95 transition-all">
+          <Printer size={18} /> 集計結果を印刷する
+        </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      {/* 印刷用見出し */}
+      <div className="hidden print:block mb-2">
+        <h1 className="text-xl font-black text-gray-900">入退院管理フォーム — 集計結果</h1>
+        <p className="text-sm text-gray-600 mt-1">
+          対象: {filterStaff === '全て' ? '全員' : filterStaff}
+          {' ／ 期間: '}{printScope === 'all' ? '全期間' : (periods.find(p => p.key === printScope)?.label || '')}
+          {' ／ 出力日: '}{formatTimestamp()}
+        </p>
+      </div>
+
+      <div className={`grid grid-cols-2 gap-3 ${printScope !== 'all' ? 'print:hidden' : ''}`}>
         <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
           <div className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1"><Users size={13} /> 合計</div>
           <div className="text-3xl font-black text-gray-800">{stats.total.count}<span className="text-sm font-bold text-gray-400 ml-1">名</span></div>
           <div className="text-sm font-black text-gray-500 mt-1">{formatCurrency(stats.total.amount)}</div>
         </div>
         <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-5 border border-orange-200 shadow-sm">
-          <div className="text-xs font-black text-orange-500 uppercase tracking-widest mb-2 flex items-center gap-1"><TrendingUp size={13} /> 退院見通し</div>
+          <div className="text-xs font-black text-orange-500 uppercase tracking-widest mb-2 flex items-center gap-1"><TrendingUp size={13} /> 退院見込み</div>
           <div className="text-2xl font-black text-orange-600">{formatCurrency(stats.total.prospectAmount)}</div>
           <div className="text-xs font-medium text-orange-400 mt-1">着地予測</div>
         </div>
       </div>
 
       {/* Bar Chart */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 print:hidden">
         <h3 className="text-xs font-black text-gray-400 mb-4 uppercase tracking-widest">入院日数 分布</h3>
         <div className="space-y-3">
           {periods.map(({ key, label, bar }) => {
@@ -814,8 +1165,8 @@ function StatsView({ staffs, records, onUpdate }) {
         </div>
       </div>
 
-      {/* Expandable Periods */}
-      <div className="space-y-2.5">
+      {/* Expandable Periods (画面用) */}
+      <div className="space-y-2.5 print:hidden">
         {periods.map(({ key, label, bar }) => {
           const s = stats[key];
           const isOpen = expandedPeriod === key;
@@ -843,6 +1194,48 @@ function StatsView({ staffs, records, onUpdate }) {
           );
         })}
       </div>
+
+      {/* 印刷用 明細テーブル */}
+      <div className="hidden print:block space-y-4">
+        {periods.filter(({ key }) => printScope === 'all' || printScope === key).map(({ key, label }) => {
+          const s = stats[key];
+          return (
+            <div key={key}>
+              <h3 className="text-sm font-black text-gray-900 mb-1 border-b-2 border-gray-800 pb-1">
+                {label}（{s.count}名 ／ {formatCurrency(s.amount)}）
+              </h3>
+              {s.items.length > 0 ? (
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-400">
+                      <th className="text-left py-1 px-1">顧客名</th>
+                      <th className="text-left py-1 px-1">担当者</th>
+                      <th className="text-left py-1 px-1">入院日</th>
+                      <th className="text-right py-1 px-1">入院日数</th>
+                      <th className="text-right py-1 px-1">金額</th>
+                      <th className="text-center py-1 px-1">退院見込み</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {s.items.map(p => (
+                      <tr key={p.id} className="border-b border-gray-200">
+                        <td className="py-1 px-1">{p.patientName}</td>
+                        <td className="py-1 px-1">{p.staff}</td>
+                        <td className="py-1 px-1">{formatJapaneseDate(p.admissionDate)}</td>
+                        <td className="py-1 px-1 text-right">{calculateDaysFromAdmission(p.admissionDate)}日</td>
+                        <td className="py-1 px-1 text-right">{formatCurrency(p.amount)}</td>
+                        <td className="py-1 px-1 text-center">{p.dischargeProspect ? '◯' : ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="text-xs text-gray-500 py-1">該当なし</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -854,13 +1247,10 @@ const StatItemRow = React.memo(({ patient, onUpdate }) => (
         <div className="font-black text-sm text-gray-800">{patient.patientName}</div>
         <div className="text-xs text-gray-400 font-medium mt-0.5">{patient.staff}</div>
       </div>
-      <label className="flex items-center gap-2 cursor-pointer">
-        <span className="text-xs font-black text-gray-500">見通し</span>
-        <button onClick={() => onUpdate({ ...patient, dischargeProspect: !patient.dischargeProspect })}
-          className={`w-10 h-5 rounded-full relative transition-colors ${patient.dischargeProspect ? 'bg-orange-500' : 'bg-gray-200'}`}>
-          <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${patient.dischargeProspect ? 'left-5' : 'left-0.5'}`} />
-        </button>
-      </label>
+      <button onClick={() => onUpdate({ ...patient, dischargeProspect: !patient.dischargeProspect })}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black border-2 transition-all ${patient.dischargeProspect ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}>
+        <CheckCircle2 size={14} /> 退院見込み
+      </button>
     </div>
     <div className="relative">
       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">¥</span>
@@ -940,29 +1330,63 @@ function MasterView({ user, workspace, staffs, showToast, onLeave }) {
 function HelpView({ workspace }) {
   const steps = [
     { n: '①', title: 'マスタに担当者を登録', desc: '「マスタ」タブから担当者名を追加してください。' },
-    { n: '②', title: '新規入力から登録', desc: '入院・退院日、顧客名を入力して保存します。' },
-    { n: '③', title: 'れん太入力チェック', desc: '一覧の「未入力」ボタンをタップして処理済にします。' },
-    { n: '④', title: '集計で売上確認', desc: '請求額と退院見通しを入力すると着地予測が出ます。' },
+    { n: '②', title: '新規入力から登録', desc: '入院・退院日、顧客名を入力して保存します。入力後、Enterキーを押すだけで素早く登録できます。' },
+    { n: '③', title: '退院処理', desc: '「退院入力」タブで患者カードをクリックすると、その場に入力フォームが展開し、退院日と請求金額を入力できます。' },
+    { n: '④', title: '検索・絞り込み', desc: '上部のフィルターを使って、担当者や経過日数から目的の対象者をすぐに絞り込めます。' },
+    { n: '⑤', title: 'れん太入力チェック', desc: '一覧の「未入力」ボタンをクリックして処理済にします。カード全体をクリックすると詳細編集画面が開きます。' },
+    { n: '⑥', title: '集計で売上確認', desc: '請求額と退院見込みを入力すると着地予測が出ます。印刷も可能です。' },
   ];
   return (
     <div className="space-y-4 animate-fade-in-up">
       <div className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl p-6 text-white shadow-xl">
-        <h2 className="text-2xl font-black flex items-center gap-2 mb-1"><HelpCircle size={26} /> 使い方ガイド</h2>
+        <h2 className="text-2xl font-bold flex items-center gap-2 mb-1"><HelpCircle size={26} /> 使い方ガイド</h2>
         <p className="text-blue-200 text-sm font-medium">グループ: {workspace}</p>
       </div>
+
+      {/* 操作のコツ */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
+        <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+          <span className="w-6 h-6 bg-emerald-100 rounded-lg flex items-center justify-center text-emerald-600"><CheckCircle2 size={14} /></span>
+          操作のコツ
+        </h3>
+        <div className="grid gap-2">
+          <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+            <span className="text-lg">⌨️</span>
+            <div>
+              <div className="font-bold text-slate-700 text-sm">Enterキーで素早く登録</div>
+              <div className="text-xs text-slate-500 font-medium mt-0.5">新規入院フォームで入力後、Enterキーを押すだけで登録できます。</div>
+            </div>
+          </div>
+          <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+            <span className="text-lg">🔍</span>
+            <div>
+              <div className="font-bold text-slate-700 text-sm">検索・フィルターで絞り込み</div>
+              <div className="text-xs text-slate-500 font-medium mt-0.5">担当者や経過日数を組み合わせて絞り込みできます。</div>
+            </div>
+          </div>
+          <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+            <span className="text-lg">👆</span>
+            <div>
+              <div className="font-bold text-slate-700 text-sm">カードをクリックして退院処理</div>
+              <div className="text-xs text-slate-500 font-medium mt-0.5">患者カードのどこをクリックしても入力フォームが開きます。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="space-y-2.5">
         {steps.map(({ n, title, desc }) => (
-          <div key={n} className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm flex gap-4">
-            <div className="w-9 h-9 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 font-black text-sm flex-shrink-0">{n}</div>
+          <div key={n} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex gap-4">
+            <div className="w-9 h-9 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 font-bold text-sm flex-shrink-0">{n}</div>
             <div>
-              <h3 className="font-black text-gray-800 text-sm mb-0.5">{title}</h3>
-              <p className="text-sm text-gray-500 font-medium leading-relaxed">{desc}</p>
+              <h3 className="font-bold text-slate-800 text-sm mb-0.5">{title}</h3>
+              <p className="text-sm text-slate-500 font-medium leading-relaxed">{desc}</p>
             </div>
           </div>
         ))}
       </div>
       <div className="bg-blue-50 rounded-2xl p-5 border border-blue-100">
-        <h3 className="font-black text-blue-700 text-sm mb-2 flex items-center gap-1"><Calendar size={15} /> 日付入力のコツ</h3>
+        <h3 className="font-bold text-blue-700 text-sm mb-2 flex items-center gap-1"><Calendar size={15} /> 日付入力のコツ</h3>
         <ul className="text-sm text-blue-600 font-medium space-y-1.5">
           <li>• <code className="bg-blue-100 px-1.5 py-0.5 rounded text-xs">5/6</code> → 今年の5月6日</li>
           <li>• <code className="bg-blue-100 px-1.5 py-0.5 rounded text-xs">0506</code> → 5月6日</li>
