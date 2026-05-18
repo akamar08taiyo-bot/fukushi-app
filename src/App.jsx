@@ -499,6 +499,7 @@ function NewRecordView({ user, workspace, staffs, records, onSuccess, onUpdate, 
   const [dSearch, setDSearch] = useState('');
   const [dDaysFilter, setDDaysFilter] = useState('ALL');
   const [dAmount, setDAmount] = useState(0);
+  const [dBillingPeriod, setDBillingPeriod] = useState('');
 
   useEffect(() => {
     if (!form.staff && staffs.length > 0) {
@@ -558,9 +559,9 @@ function NewRecordView({ user, workspace, staffs, records, onSuccess, onUpdate, 
     if (!target) return;
     setDSaving(true);
     try {
-      await onUpdate({ ...target, dischargeDate: dDate, dischargePlanned: dPlanned, amount: dAmount || target.amount || 0 });
+      await onUpdate({ ...target, dischargeDate: dDate, dischargePlanned: dPlanned, amount: dAmount || target.amount || 0, billingPeriod: dBillingPeriod || target.billingPeriod || '' });
       showToast('退院日を登録しました', 'success');
-      setDPatientId(''); setDDate(''); setDPlanned(false); setDAmount(0);
+      setDPatientId(''); setDDate(''); setDPlanned(false); setDAmount(0); setDBillingPeriod('');
       onSuccess();
     } catch { showToast('エラーが発生しました'); }
     finally { setDSaving(false); }
@@ -572,12 +573,14 @@ function NewRecordView({ user, workspace, staffs, records, onSuccess, onUpdate, 
       setDDate('');
       setDPlanned(false);
       setDAmount(0);
+      setDBillingPeriod('');
     } else {
       const target = records.find(r => r.id === id);
       setDPatientId(id);
       setDDate('');
       setDPlanned(false);
       setDAmount(target?.amount || 0);
+      setDBillingPeriod(target?.billingPeriod || '');
     }
   };
 
@@ -718,6 +721,11 @@ function NewRecordView({ user, workspace, staffs, records, onSuccess, onUpdate, 
                           {p.amount > 0 && (
                             <span className="text-xs text-slate-500 font-medium">請求金額 {formatCurrency(p.amount)}</span>
                           )}
+                          {p.billingPeriod && (
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border ${p.billingPeriod === 'half' ? 'bg-amber-50 text-amber-600 border-amber-200' : p.billingPeriod === 'month' ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-purple-50 text-purple-600 border-purple-200'}`}>
+                              {p.billingPeriod === 'half' ? '半月' : p.billingPeriod === 'month' ? '1ヶ月' : '翌月'}
+                            </span>
+                          )}
                           <div className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs">
                             <span className="text-xs text-slate-400 font-medium">
                               入院 {formatJapaneseDate(p.admissionDate)}
@@ -739,11 +747,27 @@ function NewRecordView({ user, workspace, staffs, records, onSuccess, onUpdate, 
                           </label>
                           <div className="space-y-1">
                             <label className="text-sm font-semibold text-slate-600">請求金額</label>
-                            <div className="relative">
-                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">¥</span>
-                              <input type="number" value={dAmount || ''} onChange={e => setDAmount(Number(e.target.value))} placeholder="0"
-                                className="w-full p-3 pl-7 border-2 border-slate-200 rounded-xl font-bold outline-none focus:border-blue-400 hover:border-slate-300 transition-all bg-white" />
+                            <div className="flex gap-2">
+                              <div className="relative flex-1">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">¥</span>
+                                <input type="number" value={dAmount || ''} onChange={e => setDAmount(Number(e.target.value))} placeholder="0"
+                                  className="w-full p-3 pl-7 border-2 border-slate-200 rounded-xl font-bold outline-none focus:border-blue-400 hover:border-slate-300 transition-all bg-white" />
+                              </div>
+                              <select value={dBillingPeriod} onChange={e => setDBillingPeriod(e.target.value)}
+                                className="px-3 py-3 border-2 border-slate-200 rounded-xl font-bold text-sm text-slate-700 outline-none focus:border-blue-400 hover:border-slate-300 transition-all bg-white cursor-pointer">
+                                <option value="">請求時期</option>
+                                <option value="half">半月</option>
+                                <option value="month">一ヶ月</option>
+                                <option value="next">翌月</option>
+                              </select>
                             </div>
+                            {dBillingPeriod && (
+                              <p className="text-xs font-medium text-blue-600 mt-1 pl-1">
+                                {dBillingPeriod === 'half' && '→ 半月分の請求が発生します'}
+                                {dBillingPeriod === 'month' && '→ 一ヶ月分の請求が発生します'}
+                                {dBillingPeriod === 'next' && '→ 翌月に請求が発生します'}
+                              </p>
+                            )}
                           </div>
                           <button onClick={handleDischargeSave} disabled={dSaving}
                             className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 disabled:opacity-60 transition-all flex items-center justify-center gap-2">
@@ -821,6 +845,11 @@ const PatientCard = React.memo(({ record, onEdit, onUpdate }) => {
           )}
           {record.amount > 0 && (
             <span className="px-2 py-0.5 bg-slate-50 text-slate-600 rounded text-xs font-medium border border-slate-100">請求金額 {formatCurrency(record.amount)}</span>
+          )}
+          {record.billingPeriod && (
+            <span className={`px-2 py-0.5 rounded text-xs font-bold border ${record.billingPeriod === 'half' ? 'bg-amber-50 text-amber-600 border-amber-200' : record.billingPeriod === 'month' ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-purple-50 text-purple-600 border-purple-200'}`}>
+              {record.billingPeriod === 'half' ? '半月' : record.billingPeriod === 'month' ? '1ヶ月' : '翌月'}
+            </span>
           )}
           {record.officeChecked && record.officeCheckedAt && (
             <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded text-xs font-medium border border-emerald-100">
@@ -1249,6 +1278,7 @@ function StatsView({ staffs, records, isHQ, onUpdate }) {
                     <th className="text-left py-1 px-1">入院日</th>
                     <th className="text-right py-1 px-1">日数</th>
                     <th className="text-right py-1 px-1">請求金額</th>
+                    <th className="text-center py-1 px-1">請求時期</th>
                     <th className="text-center py-1 px-1">退院見込</th>
                   </tr>
                 </thead>
@@ -1260,6 +1290,7 @@ function StatsView({ staffs, records, isHQ, onUpdate }) {
                       <td className="py-1 px-1">{formatJapaneseDate(p.admissionDate)}</td>
                       <td className="py-1 px-1 text-right">{calculateDaysFromAdmission(p.admissionDate)}日</td>
                       <td className="py-1 px-1 text-right">{formatCurrency(p.amount)}</td>
+                      <td className="py-1 px-1 text-center">{p.billingPeriod === 'half' ? '半月' : p.billingPeriod === 'month' ? '1ヶ月' : p.billingPeriod === 'next' ? '翌月' : '—'}</td>
                       <td className="py-1 px-1 text-center">{p.dischargeProspect ? '◯' : ''}</td>
                     </tr>
                   ))}
