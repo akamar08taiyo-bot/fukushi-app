@@ -18,11 +18,29 @@ input[type=number] {
 @media print {
   @page {
     size: A4;
-    margin: 12mm;
+    margin: 10mm 12mm;
   }
   body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
     background: #fff;
+    font-size: 11px;
   }
+  /* グラフのバーを印刷で色付きにする */
+  .bg-emerald-500, .bg-emerald-400 { background-color: #10b981 !important; }
+  .bg-yellow-400 { background-color: #facc15 !important; }
+  .bg-orange-500 { background-color: #f97316 !important; }
+  .bg-red-500 { background-color: #ef4444 !important; }
+  .bg-blue-500, .bg-blue-400, .bg-blue-600 { background-color: #3b82f6 !important; }
+  /* 印刷用の改ページ制御 */
+  .break-inside-avoid, .print\:break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  /* テーブルの行が途中で切れないように */
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  /* 印刷用の余白調整 */
+  .print\:p-3 { padding: 0.75rem !important; }
+  /* 印刷時のグラデーション除去 */
+  .print\:bg-white { background: white !important; }
 }

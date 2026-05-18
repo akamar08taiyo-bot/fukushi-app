@@ -1085,17 +1085,59 @@ function StatsView({ staffs, records, isHQ, onUpdate }) {
     return result;
   }, [records, filterStaff]);
 
+  // 担当者別ランキング
+  const staffRanking = useMemo(() => {
+    const admitted = records.filter(r => checkIsAdmitted(r));
+    const map = {};
+    admitted.forEach(r => {
+      const name = r.staff || '未設定';
+      if (!map[name]) map[name] = { name, count: 0, amount: 0 };
+      map[name].count++;
+      map[name].amount += Number(r.amount) || 0;
+    });
+    return Object.values(map).sort((a, b) => b.count - a.count);
+  }, [records]);
+
+  // 月別推移（過去6ヶ月）
+  const monthlyTrend = useMemo(() => {
+    const months = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      months.push({ key, label: `${d.getMonth() + 1}月`, year: d.getFullYear(), admissions: 0, discharges: 0 });
+    }
+    records.forEach(r => {
+      if (r.admissionDate) {
+        const m = r.admissionDate.substring(0, 7);
+        const found = months.find(mo => mo.key === m);
+        if (found) found.admissions++;
+      }
+      if (r.dischargeDate) {
+        const m = r.dischargeDate.substring(0, 7);
+        const found = months.find(mo => mo.key === m);
+        if (found) found.discharges++;
+      }
+    });
+    return months;
+  }, [records]);
+
+  const maxMonthly = useMemo(() => Math.max(...monthlyTrend.map(m => Math.max(m.admissions, m.discharges)), 1), [monthlyTrend]);
+
   const maxCount = Math.max(stats.under30.count, stats.under60.count, stats.under90.count, stats.over90.count, 1);
 
   const periods = [
-    { key: 'under30', label: '〜30日', bar: 'bg-emerald-500' },
-    { key: 'under60', label: '〜60日', bar: 'bg-yellow-400' },
-    { key: 'under90', label: '〜90日', bar: 'bg-orange-500' },
-    { key: 'over90', label: '90日〜', bar: 'bg-red-500' },
+    { key: 'under30', label: '〜30日', bar: 'bg-emerald-500', printBar: '#10b981' },
+    { key: 'under60', label: '〜60日', bar: 'bg-yellow-400', printBar: '#facc15' },
+    { key: 'under90', label: '〜90日', bar: 'bg-orange-500', printBar: '#f97316' },
+    { key: 'over90', label: '90日〜', bar: 'bg-red-500', printBar: '#ef4444' },
   ];
+
+  const maxStaffCount = staffRanking.length > 0 ? staffRanking[0].count : 1;
 
   return (
     <div className="space-y-4 animate-fade-in-up">
+      {/* 操作パネル（画面のみ） */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 print:hidden space-y-3">
         {!isHQ && (
           <div className="flex gap-2 overflow-x-auto no-scrollbar">
@@ -1104,7 +1146,7 @@ function StatsView({ staffs, records, isHQ, onUpdate }) {
           </div>
         )}
         <div>
-          <div className="text-xs font-black text-gray-400 mb-2">印刷する期間をえらぶ</div>
+          <div className="text-xs font-bold text-gray-400 mb-2">印刷する期間をえらぶ</div>
           <div className="flex gap-2 flex-wrap">
             <FilterChip label="全期間" isActive={printScope === 'all'} onClick={() => setPrintScope('all')} />
             <FilterChip label="〜30日" isActive={printScope === 'under30'} onClick={() => setPrintScope('under30')} />
@@ -1114,14 +1156,14 @@ function StatsView({ staffs, records, isHQ, onUpdate }) {
           </div>
         </div>
         <button onClick={() => window.print()}
-          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-xl font-black text-sm hover:bg-blue-700 active:scale-95 transition-all">
+          className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-xl font-bold text-sm hover:bg-blue-700 active:scale-95 transition-all">
           <Printer size={18} /> 集計結果を印刷する
         </button>
       </div>
 
       {/* 印刷用見出し */}
       <div className="hidden print:block mb-2">
-        <h1 className="text-xl font-black text-gray-900">入退院管理フォーム — 集計結果</h1>
+        <h1 className="text-xl font-bold text-gray-900">入退院管理フォーム — 集計レポート</h1>
         <p className="text-sm text-gray-600 mt-1">
           対象: {filterStaff === '全て' ? '全員' : filterStaff}
           {' ／ 期間: '}{printScope === 'all' ? '全期間' : (periods.find(p => p.key === printScope)?.label || '')}
@@ -1129,39 +1171,176 @@ function StatsView({ staffs, records, isHQ, onUpdate }) {
         </p>
       </div>
 
-      <div className={`grid grid-cols-2 gap-3 ${printScope !== 'all' ? 'print:hidden' : ''}`}>
-        <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-          <div className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1"><Users size={13} /> 合計</div>
-          <div className="text-3xl font-black text-gray-800">{stats.total.count}<span className="text-sm font-bold text-gray-400 ml-1">名</span></div>
-          <div className="text-sm font-black text-gray-500 mt-1">{formatCurrency(stats.total.amount)}</div>
+      {/* サマリーカード */}
+      <div className={`grid grid-cols-2 gap-3 print:grid-cols-2 print:gap-2 ${printScope !== 'all' ? 'print:hidden' : ''}`}>
+        <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm print:border-gray-300 print:rounded-lg print:p-3">
+          <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1"><Users size={13} className="print:hidden" /> 合計</div>
+          <div className="text-3xl font-bold text-gray-800 print:text-2xl">{stats.total.count}<span className="text-sm font-bold text-gray-400 ml-1">名</span></div>
+          <div className="text-sm font-bold text-gray-500 mt-1">{formatCurrency(stats.total.amount)}</div>
         </div>
-        <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-5 border border-orange-200 shadow-sm">
-          <div className="text-xs font-black text-orange-500 uppercase tracking-widest mb-2 flex items-center gap-1"><TrendingUp size={13} /> 退院見込み</div>
-          <div className="text-2xl font-black text-orange-600">{formatCurrency(stats.total.prospectAmount)}</div>
+        <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-5 border border-orange-200 shadow-sm print:bg-white print:rounded-lg print:p-3">
+          <div className="text-xs font-bold text-orange-500 uppercase tracking-widest mb-2 flex items-center gap-1"><TrendingUp size={13} className="print:hidden" /> 退院見込み</div>
+          <div className="text-2xl font-bold text-orange-600 print:text-xl">{formatCurrency(stats.total.prospectAmount)}</div>
           <div className="text-xs font-medium text-orange-400 mt-1">着地予測</div>
         </div>
       </div>
 
-      {/* Bar Chart */}
+      {/* ===== 入院日数 割合グラフ（画面 & 印刷） ===== */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 print:border-gray-300 print:rounded-lg print:p-3 print:break-inside-avoid">
+        <h3 className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">入院日数 割合</h3>
+        {stats.total.count > 0 ? (
+          <>
+            {/* 横並び割合バー */}
+            <div className="flex h-8 rounded-full overflow-hidden mb-3 print:h-6 print:rounded-md">
+              {periods.map(({ key, bar, printBar }) => {
+                const pct = (stats[key].count / stats.total.count) * 100;
+                if (pct === 0) return null;
+                return <div key={key} className={`${bar} transition-all duration-700`} style={{ width: `${pct}%`, backgroundColor: undefined }} title={`${periods.find(p=>p.key===key)?.label}: ${pct.toFixed(1)}%`} />;
+              })}
+            </div>
+            {/* 凡例 */}
+            <div className="grid grid-cols-2 gap-2 print:grid-cols-4 print:gap-1">
+              {periods.map(({ key, label, bar }) => {
+                const pct = stats.total.count > 0 ? ((stats[key].count / stats.total.count) * 100).toFixed(1) : '0.0';
+                return (
+                  <div key={key} className="flex items-center gap-2 text-xs">
+                    <div className={`w-3 h-3 rounded-sm ${bar} flex-shrink-0 print:w-2.5 print:h-2.5`} />
+                    <span className="font-bold text-gray-700">{label}</span>
+                    <span className="font-bold text-gray-500">{pct}%</span>
+                    <span className="text-gray-400">({stats[key].count}名)</span>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-gray-400 text-center py-4">データなし</p>
+        )}
+      </div>
+
+      {/* ===== 入院日数 分布 棒グラフ（画面のみ） ===== */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 print:hidden">
-        <h3 className="text-xs font-black text-gray-400 mb-4 uppercase tracking-widest">入院日数 分布</h3>
+        <h3 className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">入院日数 分布</h3>
         <div className="space-y-3">
           {periods.map(({ key, label, bar }) => {
             const s = stats[key];
             const width = s.count === 0 ? 2 : Math.max((s.count / maxCount) * 100, 8);
             return (
               <div key={key} className="flex items-center gap-3">
-                <div className="text-xs font-black text-gray-500 w-12 text-right">{label}</div>
+                <div className="text-xs font-bold text-gray-500 w-12 text-right">{label}</div>
                 <div className="flex-1 bg-gray-100 rounded-full h-8 relative overflow-hidden">
                   <div className={`${bar} h-full rounded-full transition-all duration-700`} style={{ width: `${width}%` }} />
                   <div className="absolute inset-0 flex items-center px-3">
-                    <span className="text-xs font-black text-white drop-shadow">{s.count}名</span>
+                    <span className="text-xs font-bold text-white drop-shadow">{s.count}名</span>
                   </div>
                 </div>
-                <div className="text-xs font-black text-gray-600 w-20 text-right">{formatCurrency(s.amount)}</div>
+                <div className="text-xs font-bold text-gray-600 w-20 text-right">{formatCurrency(s.amount)}</div>
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* ===== 担当者別ランキング（画面 & 印刷） ===== */}
+      {staffRanking.length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 print:border-gray-300 print:rounded-lg print:p-3 print:break-inside-avoid">
+          <h3 className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">担当者別ランキング</h3>
+          <div className="space-y-2">
+            {staffRanking.map((s, i) => {
+              const barWidth = Math.max((s.count / maxStaffCount) * 100, 8);
+              const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
+              return (
+                <div key={s.name} className="flex items-center gap-3">
+                  <div className="w-8 text-center flex-shrink-0">
+                    {medal ? <span className="text-base print:text-sm">{medal}</span> : <span className="text-xs font-bold text-gray-400">{i + 1}</span>}
+                  </div>
+                  <div className="w-16 text-xs font-bold text-gray-700 truncate flex-shrink-0 print:w-20">{s.name}</div>
+                  <div className="flex-1 bg-gray-100 rounded-full h-7 relative overflow-hidden print:h-5 print:bg-gray-200">
+                    <div className="bg-blue-500 h-full rounded-full transition-all duration-700 print:bg-blue-600" style={{ width: `${barWidth}%` }} />
+                    <div className="absolute inset-0 flex items-center px-3">
+                      <span className="text-xs font-bold text-white drop-shadow print:text-[10px]">{s.count}名</span>
+                    </div>
+                  </div>
+                  <div className="w-24 text-xs font-bold text-gray-600 text-right flex-shrink-0 print:w-20 print:text-[10px]">{formatCurrency(s.amount)}</div>
+                </div>
+              );
+            })}
+          </div>
+          {/* 印刷用テーブル版ランキング */}
+          <div className="hidden print:block mt-3 border-t border-gray-200 pt-2">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-gray-400">
+                  <th className="text-center py-1 px-1 w-8">順位</th>
+                  <th className="text-left py-1 px-1">担当者</th>
+                  <th className="text-right py-1 px-1">入院人数</th>
+                  <th className="text-right py-1 px-1">請求金額合計</th>
+                </tr>
+              </thead>
+              <tbody>
+                {staffRanking.map((s, i) => (
+                  <tr key={s.name} className="border-b border-gray-200">
+                    <td className="py-1 px-1 text-center font-bold">{i + 1}</td>
+                    <td className="py-1 px-1 font-bold">{s.name}</td>
+                    <td className="py-1 px-1 text-right">{s.count}名</td>
+                    <td className="py-1 px-1 text-right">{formatCurrency(s.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ===== 月別推移（画面 & 印刷） ===== */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 print:border-gray-300 print:rounded-lg print:p-3 print:break-inside-avoid">
+        <h3 className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">月別 入退院推移（直近6ヶ月）</h3>
+        {/* 棒グラフ風 */}
+        <div className="space-y-2">
+          {monthlyTrend.map(m => (
+            <div key={m.key} className="space-y-1">
+              <div className="text-xs font-bold text-gray-600 print:text-[10px]">{m.year !== new Date().getFullYear() ? `${m.year}年` : ''}{m.label}</div>
+              <div className="flex items-center gap-2">
+                <div className="w-10 text-[10px] font-bold text-blue-500 text-right flex-shrink-0">入院</div>
+                <div className="flex-1 bg-gray-100 rounded-full h-5 relative overflow-hidden print:h-4 print:bg-gray-200">
+                  <div className="bg-blue-400 h-full rounded-full transition-all duration-500 print:bg-blue-500" style={{ width: `${Math.max((m.admissions / maxMonthly) * 100, m.admissions > 0 ? 8 : 0)}%` }} />
+                  {m.admissions > 0 && <div className="absolute inset-0 flex items-center px-2"><span className="text-[10px] font-bold text-white drop-shadow">{m.admissions}</span></div>}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-10 text-[10px] font-bold text-emerald-500 text-right flex-shrink-0">退院</div>
+                <div className="flex-1 bg-gray-100 rounded-full h-5 relative overflow-hidden print:h-4 print:bg-gray-200">
+                  <div className="bg-emerald-400 h-full rounded-full transition-all duration-500 print:bg-emerald-500" style={{ width: `${Math.max((m.discharges / maxMonthly) * 100, m.discharges > 0 ? 8 : 0)}%` }} />
+                  {m.discharges > 0 && <div className="absolute inset-0 flex items-center px-2"><span className="text-[10px] font-bold text-white drop-shadow">{m.discharges}</span></div>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* 印刷用テーブル版 */}
+        <div className="hidden print:block mt-3 border-t border-gray-200 pt-2">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-gray-400">
+                <th className="text-left py-1 px-1">月</th>
+                <th className="text-right py-1 px-1">入院</th>
+                <th className="text-right py-1 px-1">退院</th>
+                <th className="text-right py-1 px-1">差引</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthlyTrend.map(m => (
+                <tr key={m.key} className="border-b border-gray-200">
+                  <td className="py-1 px-1 font-bold">{m.year}年{m.label}</td>
+                  <td className="py-1 px-1 text-right">{m.admissions}名</td>
+                  <td className="py-1 px-1 text-right">{m.discharges}名</td>
+                  <td className={`py-1 px-1 text-right font-bold ${m.admissions - m.discharges > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                    {m.admissions - m.discharges > 0 ? '+' : ''}{m.admissions - m.discharges}名
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -1176,11 +1355,11 @@ function StatsView({ staffs, records, isHQ, onUpdate }) {
                 className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors">
                 <div className="flex items-center gap-3">
                   <div className={`w-3 h-3 rounded-full ${bar}`} />
-                  <span className="font-black text-gray-800 text-sm">{label}</span>
-                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-black">{s.count}名</span>
+                  <span className="font-bold text-gray-800 text-sm">{label}</span>
+                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-bold">{s.count}名</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="font-black text-gray-700 text-sm">{formatCurrency(s.amount)}</span>
+                  <span className="font-bold text-gray-700 text-sm">{formatCurrency(s.amount)}</span>
                   <ChevronDown size={16} className={`text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                 </div>
               </button>
@@ -1200,8 +1379,8 @@ function StatsView({ staffs, records, isHQ, onUpdate }) {
         {periods.filter(({ key }) => printScope === 'all' || printScope === key).map(({ key, label }) => {
           const s = stats[key];
           return (
-            <div key={key}>
-              <h3 className="text-sm font-black text-gray-900 mb-1 border-b-2 border-gray-800 pb-1">
+            <div key={key} className="break-inside-avoid">
+              <h3 className="text-sm font-bold text-gray-900 mb-1 border-b-2 border-gray-800 pb-1">
                 {label}（{s.count}名 ／ {formatCurrency(s.amount)}）
               </h3>
               {s.items.length > 0 ? (
